@@ -1,90 +1,55 @@
 package store
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
-	"os"
+	"sync"
 
-	"github.com/ssenthilnathan3/kvgo/constants"
 	"github.com/ssenthilnathan3/kvgo/internal/persistence"
-	"github.com/ssenthilnathan3/kvgo/internal/types"
 )
 
 
-func WithStore(ctx context.Context, store *types.Store) context.Context {
-	return context.WithValue(ctx, constants.StoreKey, store)
+type Store struct {
+	Mu sync.RWMutex
+	Data map[string]string
+	Persister persistence.Persister
 }
 
-func GetStore(ctx context.Context) (*types.Store, bool) {
-	user, ok := ctx.Value(constants.StoreKey).(*types.Store)
-	return user, ok
-}
-
-func Get(ctx context.Context, key string) (string, error) {
-	s, exists := GetStore(ctx)
-	if !exists {
-		fmt.Println("Store not found in context")
-		return "", nil
-	}
-
+func (s *Store) Get(key string) (string, error) {
 	var value string
 
-	s.Mu.Lock()
-	value = s.Data[key]
-	s.Mu.Unlock()
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
+
+	value, exists := s.Data[key]
+	if !exists {
+		err := fmt.Errorf("Value not found")
+		return "", err
+	}
 
 	return value, nil
 }
 
-func Put(ctx context.Context, key string, value string) error {
-	s, exists := GetStore(ctx)
-	if !exists {
-		fmt.Println("Store not found in context!")
-		return nil
-	}
-
+func (s *Store) Put(key string, value string) error {
 	s.Mu.Lock()
-	s.Data[key] = value
-	s.Mu.Unlock()
+	defer s.Mu.Unlock()
 
-	err := persistence.WritePersist(key, value)
-	if err != nil {
-		fmt.Println("Key stored successfully")
+	s.Data[key] = value
+
+	return s.Persister.Save(s.Data)
+}
+
+func (s *Store) Delete(key string) error {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+
+	_, exists := s.Data[key]
+	if !exists {
+		err := fmt.Errorf("Key not found")
 		return err
 	}
-	return nil
-}
 
-func Delete(ctx context.Context, key string) error {
-	s, exists := GetStore(ctx)
-	if !exists {
-		fmt.Println("Store not found in context")
-		return nil
-	}
-
-	s.Mu.Lock()
 	delete(s.Data, key)
-	s.Mu.Unlock()
 
-	return nil
-}
-
-func LoadPersist(ctx context.Context) (context.Context, error) {
-	fileBytes, err := os.ReadFile(constants.DB)
-	if err != nil {
-		fmt.Printf("Error reading file")
-		return nil, err
-	}
-
-	var decodedStore types.Store
-
-	err = json.Unmarshal(fileBytes, &decodedStore)
-	if err != nil {
-		fmt.Printf("Error decoding file")
-		return nil, err
-	}
-
-	return WithStore(ctx, &decodedStore), nil
+	return s.Persister.Save(s.Data)
 }
 
