@@ -15,7 +15,16 @@ func main() {
 		Path: constants.DB,
 	}
 
+	loader := &persistence.WALLoader {
+		WALPath: constants.WAL,
+	}
+
 	data, err := persister.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	wal, err := loader.LoadWAL()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -23,6 +32,12 @@ func main() {
 	s := &store.Store{
 		Data: data,
 		Persister: persister,
+		WAL: *loader,
+	}
+
+	err = s.Exec(wal)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	h := api.Handler{

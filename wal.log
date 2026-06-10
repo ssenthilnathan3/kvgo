@@ -1,0 +1,9 @@
+PUT foo bar
+DELETE foo 
+PUT foo bary
+PUT fooe bary
+PUT foo bar
+DELETE foo 
+PUT foo bary
+PUT fooe bary
+DELETE foo 
