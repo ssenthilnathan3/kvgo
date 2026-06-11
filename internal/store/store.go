@@ -2,7 +2,9 @@ package store
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/ssenthilnathan3/kvgo/internal/persistence"
 )
@@ -12,7 +14,7 @@ type Store struct {
 	Mu sync.RWMutex
 	Data map[string]string
 	Persister persistence.Persister
-	WAL persistence.WALLoader
+	WAL *persistence.WALLoader
 }
 
 func (s *Store) Get(key string) (string, error) {
@@ -36,8 +38,10 @@ func (s *Store) Put(key string, value string) error {
 
 	s.Data[key] = value
 
-	s.WAL.AppendLog("PUT", key, value)
-	return s.Persister.Save(s.Data)
+	var now = time.Now().Unix()
+	timestamp := strconv.FormatInt(now, 10)
+
+	return s.WAL.AppendLog(timestamp, "PUT", key, value)
 }
 
 func (s *Store) Delete(key string) error {
@@ -46,32 +50,34 @@ func (s *Store) Delete(key string) error {
 
 	_, exists := s.Data[key]
 	if !exists {
-		err := fmt.Errorf("Key not found")
-		return err
+		return fmt.Errorf("Key not found")
 	}
-	s.WAL.AppendLog("DELETE", key, "")
-	delete(s.Data, key)
 
-	return s.Persister.Save(s.Data)
+	var now = time.Now().Unix()
+	timestamp := strconv.FormatInt(now, 10)
+
+	delete(s.Data, key)
+	return s.WAL.AppendLog(timestamp, "DELETE", key, "")
 }
 
 func (s *Store) Exec(commands []persistence.WAL) error {
-
 	for _, c := range commands {
 		switch c.Command {
 		case "PUT":
-			err := s.Put(c.Key, c.Value)
-			if err != nil {
-				return err
-			}
+			s.Mu.Lock()
+			s.Data[c.Key] = c.Value
+			s.Mu.Unlock()
 		case "DELETE":
-			err := s.Delete(c.Key)
-			if err != nil {
-				return err
-			}
+			s.Mu.Lock()
+			delete(s.Data, c.Key)
+			s.Mu.Unlock()
 		default:
 			return fmt.Errorf("No valid command found")
 		}
 	}
 	return nil
+}
+
+func (s *Store) TakeSnap() error {
+	return s.Persister.Save(s.Data)
 }

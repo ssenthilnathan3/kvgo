@@ -1,13 +1,17 @@
 package persistence
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/ssenthilnathan3/kvgo/constants"
 )
 
 type WAL struct {
+	Timestamp string
 	Command string
 	Key string
 	Value string
@@ -55,46 +59,50 @@ func (p *JSONFilePersister) Save(data map[string]string) error {
 
 type WALLoader struct {
 	WALPath string
+	WALIndex int64
+	WALChan chan struct{}
 }
 
-func parseWAL(file []byte, logs *[]WAL) error {
+func parseWAL(file []byte, logs *[]WAL) (int64, error) {
 	lines := strings.Split(strings.TrimSpace(string(file)), "\n")
-
+	lineCount := 0
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		lineCount++
+		fields := strings.Split(line, "\t")
 
-		fields := strings.Fields(line)
-
-		switch fields[0] {
+		switch fields[1] {
 		case "PUT":
-			if len(fields) != 3 {
-				return fmt.Errorf("invalid PUT: %q", line)
+			if len(fields) != 4 {
+				return 0, fmt.Errorf("invalid PUT: %s", line)
 			}
 
 			*logs = append(*logs, WAL{
 				Command: "PUT",
-				Key:     fields[1],
-				Value:   fields[2],
+				Timestamp: fields[0],
+				Key:     fields[2],
+				Value:   fields[3],
 			})
 
 		case "DELETE":
-			if len(fields) != 2 {
-				return fmt.Errorf("invalid DELETE: %q", line)
+			if len(fields) != 3 {
+				return 0, fmt.Errorf("invalid DELETE: %s", line)
 			}
 
 			*logs = append(*logs, WAL{
 				Command: "DELETE",
-				Key:     fields[1],
+				Timestamp: fields[0],
+				Key:     fields[2],
 			})
 
 		default:
-			return fmt.Errorf("unknown command: %s", fields[0])
+			return 0, fmt.Errorf("unknown command: %s", fields[0])
 		}
 	}
 
-	return nil
+	return int64(lineCount), nil
 }
 
 func (ld *WALLoader) LoadWAL() ([]WAL, error) {
@@ -112,14 +120,17 @@ func (ld *WALLoader) LoadWAL() ([]WAL, error) {
 		return logs, nil
 	}
 
-	if err := parseWAL(file, &logs); err != nil {
+	walCount, err := parseWAL(file, &logs)
+	if err != nil {
 		return nil, err
 	}
+
+	ld.WALIndex = walCount
 	return logs, nil
 }
 
 
-func (ld *WALLoader) AppendLog(command string, key string, value string) error {
+func (ld *WALLoader) AppendLog(timestamp string, command string, key string, value string) error {
 	f, err := os.OpenFile(
 		ld.WALPath,
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
@@ -130,7 +141,74 @@ func (ld *WALLoader) AppendLog(command string, key string, value string) error {
 	}
 	defer f.Close()
 
-	_, err = fmt.Fprintf(f, "%s %s %s\n", command, key, value)
+	if command == "DELETE" {
+		_, err = fmt.Fprintf(f, "%s\tDELETE\t%s\n", timestamp, key)
+		ld.WALIndex += 1
+	} else {
+		_, err = fmt.Fprintf(f, "%s\t%s\t%s\t%s\n", timestamp, command, key, value)
+		ld.WALIndex += 1
+	}
+
+	if ld.WALIndex >= constants.WALMax {
+		ld.WALChan <- struct{}{}
+	}
 	return err
 }
 
+func (ld *WALLoader) TruncateLog() error {
+	if _, err := os.Stat(ld.WALPath); os.IsNotExist(err) {
+		return nil
+	}
+
+	inputFile, err := os.Open(ld.WALPath)
+	if err != nil {
+		return fmt.Errorf("Failed to open log file: %v", err)
+	}
+
+	defer inputFile.Close()
+
+	tempPath := ld.WALPath + ".tmp"
+	tempFile, err := os.Create(tempPath)
+
+	if err != nil {
+		return fmt.Errorf("Failed to create temporary file: %v", err)
+	}
+	defer tempFile.Close()
+
+	writer := bufio.NewWriter(tempFile)
+	scanner := bufio.NewScanner(inputFile)
+
+	lineCount := 0
+	for scanner.Scan() {
+		lineCount++
+		line := scanner.Text()
+
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		fields := strings.Split(line, "\t")
+		if len(fields) < 3 {
+			continue
+		}
+
+		if lineCount >= constants.WALMax {
+				_, err := writer.WriteString(line + "\n")
+				ld.WALIndex = 0
+				if err != nil {
+					return fmt.Errorf("Failed to write temp file: %v", err)
+				}
+		}
+	}
+
+	writer.Flush()
+
+	inputFile.Close()
+	tempFile.Close()
+
+	err = os.Rename(tempPath, ld.WALPath)
+	if err != nil {
+		return fmt.Errorf("Failed to replace log file: %v", err)
+	}
+	return nil
+}
