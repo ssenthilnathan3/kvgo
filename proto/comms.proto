@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+option go_package = "github.com/ssenthilnathan3/kvgo/proto";
+
+package proto;
+
+service CommsService {
+  rpc Ping(PingRequest) returns (PingResponse) {}
+  rpc Info(InfoRequest) returns (InfoResponse) {}
+  rpc Broadcast(BroadcastRequest) returns (BroadcastResponse) {}
+}
+
+message PingRequest {}
+
+message InfoRequest {}
+
+message BroadcastRequest {
+  string message = 5;
+}
+
+message PingResponse {
+  string message = 1;
+}
+
+message InfoResponse {
+  string node_id = 2;
+  repeated string peers = 3;
+}
+
+message BroadcastResponse {
+  string message = 4;
+}

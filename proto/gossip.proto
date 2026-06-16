@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+option go_package = "github.com/ssenthilnathan3/kvgo/proto";
+
+package proto;
+
+service GossipService {
+  rpc Gossip(GossipRequest) returns (GossipResponse) {}
+}
+
+message Node {
+  string id = 1;
+  string host = 2;
+  int32 port = 3;
+}
+
+message GossipRequest {
+  string sender_id = 1;
+  repeated Node peers = 2;
+}
+
+message GossipResponse {
+  repeated Node peers = 1;
+}

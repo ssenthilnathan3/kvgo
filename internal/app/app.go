@@ -1,0 +1,180 @@
+package app
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+	"github.com/ssenthilnathan3/kvgo/internal/api"
+	"github.com/ssenthilnathan3/kvgo/internal/cluster"
+	"github.com/ssenthilnathan3/kvgo/internal/persistence"
+	"github.com/ssenthilnathan3/kvgo/internal/store"
+	pb "github.com/ssenthilnathan3/kvgo/proto"
+	"google.golang.org/grpc"
+)
+
+type Seed struct {
+	ID   string `json:"id"`
+	Host string `json:"host"`
+	Port int    `json:"port"`
+	Grpc int    `json:"grpc"`
+}
+
+type SeedFile struct {
+	Seeds []Seed `json:"seeds"`
+}
+
+func NewCluster(nodeID string) (*cluster.Cluster, error) {
+	file, err := os.Open("seeds.json")
+	if err != nil {
+		return nil, fmt.Errorf("Failed to open seeds.json: %v", err)
+	}
+	defer file.Close()
+
+	var config SeedFile
+	if err := json.NewDecoder(file).Decode(&config); err != nil {
+		return nil, fmt.Errorf("Failed to parse seeds.json: %v", err)
+	}
+
+	var self *Seed
+	peers := make([]cluster.Node, 0)
+
+	for _, s := range config.Seeds {
+		if s.ID == nodeID {
+			self = &s
+		} else {
+			peers = append(peers, cluster.Node{
+				ID:   s.ID,
+				Host: s.Host,
+				Port: s.Port,
+				Grpc: s.Grpc,
+			})
+		}
+	}
+
+	if self == nil {
+		return nil, fmt.Errorf("Node ID %q not found in seeds.json", nodeID)
+	}
+
+	return &cluster.Cluster{
+		Self: cluster.Node{
+			ID:   self.ID,
+			Host: self.Host,
+			Port: self.Port,
+			Grpc: self.Grpc,
+		},
+		Peers: peers,
+	}, nil
+}
+
+func NewServer(
+	clusterConfig *cluster.Cluster,
+	stopChan chan struct{},
+) (*gin.Engine, *grpc.Server, error) {
+
+	walMaxChan := make(chan struct{})
+
+	persister := &persistence.JSONFilePersister{
+		Path: persistence.DB,
+	}
+
+	loader := &persistence.WALLoader{
+		WALPath:  persistence.WALPath,
+		WALIndex: 0,
+		WALMax:   persistence.WALMax,
+		WALChan:  walMaxChan,
+	}
+
+	data, err := persister.Load()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	wal, err := loader.LoadWAL()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	s := &store.Store{
+		Data:      data,
+		Persister: persister,
+		WAL:       loader,
+	}
+
+	if err := s.Exec(wal); err != nil {
+		return nil, nil, err
+	}
+
+	h := api.Handler{
+		Store: s,
+	}
+
+	if loader.WALIndex >= persistence.WALMax {
+		select {
+		case walMaxChan <- struct{}{}:
+		default:
+		}
+	}
+
+	go func() {
+		for {
+			select {
+			case <-walMaxChan:
+				if err := s.TakeSnap(); err != nil {
+					log.Printf("snapshot error: %v", err)
+				}
+
+				if err := s.WAL.TruncateLog(); err != nil {
+					log.Printf("wal truncation error: %v", err)
+				}
+
+			case <-stopChan:
+				return
+			}
+		}
+	}()
+
+	r := gin.Default()
+	grpcServer := grpc.NewServer()
+
+	r.POST("/keys", h.CreateKey)
+	r.GET("/keys/:key", h.GetKey)
+	r.DELETE("/keys/:key", h.DeleteKey)
+
+	grpcSrv := &cluster.CommsServer{
+		Store:  s,
+		Config: *clusterConfig,
+	}
+
+	pb.RegisterCommsServiceServer(grpcServer, grpcSrv)
+
+	return r, grpcServer, nil
+}
+
+func RunServer(clusterConfig *cluster.Cluster) error {
+	stopChan := make(chan struct{})
+
+	r, grpcServer, err := NewServer(clusterConfig, stopChan)
+	if err != nil {
+		return fmt.Errorf("Error creating server: %v", err)
+	}
+
+	lis, err := net.Listen("tcp", ":"+strconv.Itoa(clusterConfig.Self.Grpc))
+	if err != nil {
+		return fmt.Errorf("Error creating listener: %v", err)
+	}
+
+	go func() { fmt.Println(grpcServer.Serve(lis)) }()
+	err = r.Run(":" + strconv.Itoa(clusterConfig.Self.Port))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer lis.Close()
+	defer close(stopChan)
+	return nil
+}

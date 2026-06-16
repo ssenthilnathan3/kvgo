@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/ssenthilnathan3/kvgo/constants"
 )
+
+const DB = "data.json"
+const WALPath = "wal.log"
+const WALMax = 1250
 
 type WAL struct {
 	Timestamp string
@@ -60,12 +62,14 @@ func (p *JSONFilePersister) Save(data map[string]string) error {
 type WALLoader struct {
 	WALPath string
 	WALIndex int64
+	WALMax int64
 	WALChan chan struct{}
 }
 
-func parseWAL(file []byte, logs *[]WAL) (int64, error) {
+func parseWAL(file []byte) ([]WAL, int64, error) {
 	lines := strings.Split(strings.TrimSpace(string(file)), "\n")
 	lineCount := 0
+	logs := make([]WAL, 0)
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -76,10 +80,10 @@ func parseWAL(file []byte, logs *[]WAL) (int64, error) {
 		switch fields[1] {
 		case "PUT":
 			if len(fields) != 4 {
-				return 0, fmt.Errorf("invalid PUT: %s", line)
+				return []WAL{}, 0, fmt.Errorf("invalid PUT: %s", line)
 			}
 
-			*logs = append(*logs, WAL{
+			logs = append(logs, WAL{
 				Command: "PUT",
 				Timestamp: fields[0],
 				Key:     fields[2],
@@ -88,21 +92,21 @@ func parseWAL(file []byte, logs *[]WAL) (int64, error) {
 
 		case "DELETE":
 			if len(fields) != 3 {
-				return 0, fmt.Errorf("invalid DELETE: %s", line)
+				return []WAL{}, 0, fmt.Errorf("invalid DELETE: %s", line)
 			}
 
-			*logs = append(*logs, WAL{
+			logs = append(logs, WAL{
 				Command: "DELETE",
 				Timestamp: fields[0],
 				Key:     fields[2],
 			})
 
 		default:
-			return 0, fmt.Errorf("unknown command: %s", fields[0])
+			return []WAL{}, 0, fmt.Errorf("unknown command: %s", fields[0])
 		}
 	}
 
-	return int64(lineCount), nil
+	return logs, int64(lineCount), nil
 }
 
 func (ld *WALLoader) LoadWAL() ([]WAL, error) {
@@ -120,7 +124,7 @@ func (ld *WALLoader) LoadWAL() ([]WAL, error) {
 		return logs, nil
 	}
 
-	walCount, err := parseWAL(file, &logs)
+	logs, walCount, err := parseWAL(file)
 	if err != nil {
 		return nil, err
 	}
@@ -148,9 +152,11 @@ func (ld *WALLoader) AppendLog(timestamp string, command string, key string, val
 		_, err = fmt.Fprintf(f, "%s\t%s\t%s\t%s\n", timestamp, command, key, value)
 		ld.WALIndex += 1
 	}
-
-	if ld.WALIndex >= constants.WALMax {
-		ld.WALChan <- struct{}{}
+	if ld.WALIndex >= ld.WALMax {
+		select {
+		case ld.WALChan <- struct{}{}:
+			default:
+		}
 	}
 	return err
 }
@@ -192,7 +198,7 @@ func (ld *WALLoader) TruncateLog() error {
 			continue
 		}
 
-		if lineCount >= constants.WALMax {
+		if lineCount >= int(ld.WALMax) {
 				_, err := writer.WriteString(line + "\n")
 				ld.WALIndex = 0
 				if err != nil {
