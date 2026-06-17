@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -12,24 +13,35 @@ const DB = "data.json"
 const WALPath = "wal.log"
 const WALMax = 1250
 
+type Entry struct {
+	Value string `json:"string"`
+	Timestamp int64 `json:"version"`
+}
+
 type WAL struct {
-	Timestamp string
 	Command string
 	Key string
-	Value string
+	Value Entry
+}
+
+type WALLoader struct {
+	WALPath string
+	WALIndex int64
+	WALMax int64
+	WALChan chan struct{}
 }
 
 type Persister interface {
-	Load() (map[string]string, error)
-	Save(map[string]string) error
+	Load() (map[string]Entry, error)
+	Save(map[string]Entry) error
 }
 
 type JSONFilePersister struct {
 	Path string
 }
 
-func (p *JSONFilePersister) Load() (map[string]string, error) {
-	data := make(map[string]string)
+func (p *JSONFilePersister) Load() (map[string]Entry, error) {
+	data := make(map[string]Entry)
 
 	file, err := os.ReadFile(p.Path)
 	if err != nil {
@@ -49,21 +61,13 @@ func (p *JSONFilePersister) Load() (map[string]string, error) {
 	return data, nil
 }
 
-func (p *JSONFilePersister) Save(data map[string]string) error {
+func (p *JSONFilePersister) Save(data map[string]Entry) error {
 	encoded, err := json.MarshalIndent(data, "", " ")
 	if err != nil {
 		return err
 	}
 
 	return os.WriteFile(p.Path, encoded, 0644)
-}
-
-
-type WALLoader struct {
-	WALPath string
-	WALIndex int64
-	WALMax int64
-	WALChan chan struct{}
 }
 
 func parseWAL(file []byte) ([]WAL, int64, error) {
@@ -77,6 +81,15 @@ func parseWAL(file []byte) ([]WAL, int64, error) {
 		lineCount++
 		fields := strings.Split(line, "\t")
 
+		if len(fields) < 3 {
+			return []WAL{}, 0, fmt.Errorf("invalid WAL entry: %s", line)
+		}
+
+		timestamp, err := strconv.ParseInt(fields[0], 10, 64)
+		if err != nil {
+			return []WAL{}, 0, fmt.Errorf("invalid timestamp in WAL entry: %s", line)
+		}
+
 		switch fields[1] {
 		case "PUT":
 			if len(fields) != 4 {
@@ -85,24 +98,25 @@ func parseWAL(file []byte) ([]WAL, int64, error) {
 
 			logs = append(logs, WAL{
 				Command: "PUT",
-				Timestamp: fields[0],
 				Key:     fields[2],
-				Value:   fields[3],
+				Value: Entry{
+					Value:     fields[3],
+					Timestamp: timestamp,
+				},
 			})
 
 		case "DELETE":
-			if len(fields) != 3 {
+			if len(fields) < 3 {
 				return []WAL{}, 0, fmt.Errorf("invalid DELETE: %s", line)
 			}
 
 			logs = append(logs, WAL{
 				Command: "DELETE",
-				Timestamp: fields[0],
 				Key:     fields[2],
 			})
 
 		default:
-			return []WAL{}, 0, fmt.Errorf("unknown command: %s", fields[0])
+			return []WAL{}, 0, fmt.Errorf("unknown command: %s", fields[1])
 		}
 	}
 
@@ -145,13 +159,8 @@ func (ld *WALLoader) AppendLog(timestamp string, command string, key string, val
 	}
 	defer f.Close()
 
-	if command == "DELETE" {
-		_, err = fmt.Fprintf(f, "%s\tDELETE\t%s\n", timestamp, key)
-		ld.WALIndex += 1
-	} else {
-		_, err = fmt.Fprintf(f, "%s\t%s\t%s\t%s\n", timestamp, command, key, value)
-		ld.WALIndex += 1
-	}
+	_, err = fmt.Fprintf(f, "%s\t%s\t%s\t%s\n", timestamp, command, key, value)
+	ld.WALIndex += 1
 	if ld.WALIndex >= ld.WALMax {
 		select {
 		case ld.WALChan <- struct{}{}:

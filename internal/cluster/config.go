@@ -11,4 +11,5 @@ type Node struct {
 type Cluster struct {
 	Self Node
 	Peers []Node
+	Clients map[string]*PeerClient
 }

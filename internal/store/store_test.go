@@ -7,14 +7,14 @@ import (
 )
 
 type mockPersister struct {
-    data map[string]string
+    data map[string]persistence.Entry
 }
 
-func (m *mockPersister) Load() (map[string]string, error) {
+func (m *mockPersister) Load() (map[string]persistence.Entry, error) {
     return m.data, nil
 }
 
-func (m *mockPersister) Save(data map[string]string) error {
+func (m *mockPersister) Save(data map[string]persistence.Entry) error {
     m.data = data
     return nil
 }
@@ -27,9 +27,9 @@ func (m *mockWAL) AppendLog(timestamp, command, key, value string) error {
 
 func TestPutAndGet(t *testing.T) {
 	s := &Store{
-		Data: make(map[string]string),
+		Data: make(map[string]persistence.Entry),
 		Persister: &mockPersister{
-			data: make(map[string]string),
+			data: make(map[string]persistence.Entry),
 		},
 		WAL: &persistence.WALLoader{
 			WALPath: "/dev/null",
@@ -53,9 +53,9 @@ func TestPutAndGet(t *testing.T) {
 
 func TestGetMissingKey(t *testing.T) {
 	s := &Store{
-		Data: make(map[string]string),
+		Data: make(map[string]persistence.Entry),
 		Persister: &mockPersister{
-			data: make(map[string]string),
+			data: make(map[string]persistence.Entry),
 		},
 		WAL: &persistence.WALLoader{
 			WALPath: "/dev/null",
@@ -70,9 +70,9 @@ func TestGetMissingKey(t *testing.T) {
 
 func TestDeleteKey(t *testing.T) {
 	s := &Store{
-		Data: make(map[string]string),
+		Data: make(map[string]persistence.Entry),
 		Persister: &mockPersister{
-			data: make(map[string]string),
+			data: make(map[string]persistence.Entry),
 		},
 		WAL: &persistence.WALLoader{
 			WALPath: "/dev/null",

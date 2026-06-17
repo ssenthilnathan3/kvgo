@@ -2,6 +2,8 @@ package cluster
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/ssenthilnathan3/kvgo/internal/store"
 	pb "github.com/ssenthilnathan3/kvgo/proto"
@@ -22,5 +24,16 @@ func (s *CommsServer) Info(ctx context.Context, req *pb.InfoRequest) (*pb.InfoRe
 }
 
 func (s *CommsServer) Broadcast(ctx context.Context, req *pb.BroadcastRequest) (*pb.BroadcastResponse, error) {
-	return &pb.BroadcastResponse{Message: ""}, nil
+	key, value, found := strings.Cut(req.Message, "=")
+	if !found {
+		return nil, fmt.Errorf("Error parsing broadcast request")
+	}
+
+	err := s.Store.Put(key, value)
+	if err != nil {
+		return nil, fmt.Errorf("Error adding message to store")
+	}
+
+	return &pb.BroadcastResponse{Message: "Broacast successful"}, nil
 }
+

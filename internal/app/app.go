@@ -114,6 +114,9 @@ func NewServer(
 
 	h := api.Handler{
 		Store: s,
+		Replicate: func(key, value string) {
+			clusterConfig.Replicate(key, value)
+		},
 	}
 
 	if loader.WALIndex >= persistence.WALMax {
@@ -181,7 +184,6 @@ func RunServer(clusterConfig *cluster.Cluster) error {
 			log.Printf("Failed to connect to peer %s: %v", peer.ID, err)
 			continue
 		}
-		defer client.Close()
 
 		go func(c *cluster.PeerClient, p *cluster.Node) {
 			ticker := time.NewTicker(5 * time.Second)
@@ -190,12 +192,19 @@ func RunServer(clusterConfig *cluster.Cluster) error {
 				err := c.Ping(ctx)
 				cancel()
 				if err != nil {
+					p.Alive = false
 					log.Printf("Peer %s unreachable: %v", p.ID, err)
+				}
+
+				if !p.Alive && err == nil {
+					p.Alive = true
 				}
 			}
 		}(client, peer)
 	}
 
+
+	clusterConfig.ConnectAll()
 	err = r.Run(":" + strconv.Itoa(clusterConfig.Self.Port))
 	if err != nil {
 		log.Fatal(err)

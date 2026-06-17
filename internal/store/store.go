@@ -9,34 +9,33 @@ import (
 	"github.com/ssenthilnathan3/kvgo/internal/persistence"
 )
 
-
 type Store struct {
 	Mu sync.RWMutex
-	Data map[string]string
+	Data map[string]persistence.Entry
 	Persister persistence.Persister
 	WAL *persistence.WALLoader
 }
 
 func (s *Store) Get(key string) (string, error) {
-	var value string
+	var entry persistence.Entry
 
 	s.Mu.RLock()
 	defer s.Mu.RUnlock()
 
-	value, exists := s.Data[key]
+	entry, exists := s.Data[key]
 	if !exists {
 		err := fmt.Errorf("Value not found")
 		return "", err
 	}
 
-	return value, nil
+	return entry.Value, nil
 }
 
 func (s *Store) Put(key string, value string) error {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
 
-	s.Data[key] = value
+	s.Data[key] = persistence.Entry{Value: value, Timestamp: time.Now().UnixNano()}
 
 	var now = time.Now().Unix()
 	timestamp := strconv.FormatInt(now, 10)
@@ -65,7 +64,7 @@ func (s *Store) Exec(commands []persistence.WAL) error {
 		switch c.Command {
 		case "PUT":
 			s.Mu.Lock()
-			s.Data[c.Key] = c.Value
+			s.Data[c.Key] = persistence.Entry{Value: c.Value.Value, Timestamp: c.Value.Timestamp}
 			s.Mu.Unlock()
 		case "DELETE":
 			s.Mu.Lock()

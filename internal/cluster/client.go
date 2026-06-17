@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	pb "github.com/ssenthilnathan3/kvgo/proto"
 	"google.golang.org/grpc"
@@ -10,19 +11,18 @@ import (
 )
 
 type PeerClient struct {
-	Node   Node
 	conn   *grpc.ClientConn
 	Client pb.CommsServiceClient
+	Mu sync.Mutex
 }
 
-func ConnectToPeer(peer Node) (*PeerClient, error) {
-	addr := fmt.Sprintf("%s:%d", peer.Host, peer.Grpc)
+func ConnectToPeer(node Node) (*PeerClient, error) {
+	addr := fmt.Sprintf("%s:%d", node.Host, node.Grpc)
 	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}
 	return &PeerClient{
-		Node:   peer,
 		conn:   conn,
 		Client: pb.NewCommsServiceClient(conn),
 	}, nil

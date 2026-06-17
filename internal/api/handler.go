@@ -7,6 +7,7 @@ import (
 
 type Handler struct {
 	Store *store.Store
+	Replicate func(key, value string)
 }
 
 func (h *Handler) CreateKey(ginCtx *gin.Context) {
@@ -21,6 +22,10 @@ func (h *Handler) CreateKey(ginCtx *gin.Context) {
 		if err := h.Store.Put(key, value); err != nil {
 			ginCtx.JSON(500, gin.H{"error": err.Error()})
 			return
+		}
+
+		if h.Replicate != nil {
+			h.Replicate(key, value)
 		}
 	}
 
