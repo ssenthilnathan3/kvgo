@@ -1,12 +1,14 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ssenthilnathan3/kvgo/internal/api"
@@ -62,10 +64,11 @@ func NewCluster(nodeID string) (*cluster.Cluster, error) {
 
 	return &cluster.Cluster{
 		Self: cluster.Node{
-			ID:   self.ID,
-			Host: self.Host,
-			Port: self.Port,
-			Grpc: self.Grpc,
+			ID:    self.ID,
+			Host:  self.Host,
+			Port:  self.Port,
+			Grpc:  self.Grpc,
+			Alive: true,
 		},
 		Peers: peers,
 	}, nil
@@ -168,7 +171,31 @@ func RunServer(clusterConfig *cluster.Cluster) error {
 		return fmt.Errorf("Error creating listener: %v", err)
 	}
 
-	go func() { fmt.Println(grpcServer.Serve(lis)) }()
+	go func() { log.Println(grpcServer.Serve(lis)) }()
+
+	// Heartbeat loop for each peer
+	for i := range clusterConfig.Peers {
+		peer := &clusterConfig.Peers[i]
+		client, err := cluster.ConnectToPeer(*peer)
+		if err != nil {
+			log.Printf("Failed to connect to peer %s: %v", peer.ID, err)
+			continue
+		}
+		defer client.Close()
+
+		go func(c *cluster.PeerClient, p *cluster.Node) {
+			ticker := time.NewTicker(5 * time.Second)
+			for range ticker.C {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				err := c.Ping(ctx)
+				cancel()
+				if err != nil {
+					log.Printf("Peer %s unreachable: %v", p.ID, err)
+				}
+			}
+		}(client, peer)
+	}
+
 	err = r.Run(":" + strconv.Itoa(clusterConfig.Self.Port))
 	if err != nil {
 		log.Fatal(err)

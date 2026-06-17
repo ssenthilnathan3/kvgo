@@ -5,6 +5,7 @@ type Node struct {
 	Host string
 	Port int
 	Grpc int
+	Alive bool
 }
 
 type Cluster struct {
