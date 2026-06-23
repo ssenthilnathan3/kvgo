@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -62,16 +65,17 @@ func NewCluster(nodeID string) (*cluster.Cluster, error) {
 		return nil, fmt.Errorf("Node ID %q not found in seeds.json", nodeID)
 	}
 
-	return &cluster.Cluster{
+	cluster_cons := &cluster.Cluster{
 		Self: cluster.Node{
 			ID:    self.ID,
 			Host:  self.Host,
 			Port:  self.Port,
 			Grpc:  self.Grpc,
-			Alive: true,
 		},
 		Peers: peers,
-	}, nil
+	}
+	cluster_cons.Self.Alive.Store(true)
+	return cluster_cons, nil
 }
 
 func NewServer(
@@ -153,7 +157,7 @@ func NewServer(
 
 	grpcSrv := &cluster.CommsServer{
 		Store:  s,
-		Config: *clusterConfig,
+		Config: clusterConfig,
 	}
 
 	pb.RegisterCommsServiceServer(grpcServer, grpcSrv)
@@ -179,7 +183,7 @@ func RunServer(clusterConfig *cluster.Cluster) error {
 	// Heartbeat loop for each peer
 	for i := range clusterConfig.Peers {
 		peer := &clusterConfig.Peers[i]
-		client, err := cluster.ConnectToPeer(*peer)
+		client, err := cluster.ConnectToPeer(peer)
 		if err != nil {
 			log.Printf("Failed to connect to peer %s: %v", peer.ID, err)
 			continue
@@ -189,28 +193,45 @@ func RunServer(clusterConfig *cluster.Cluster) error {
 			ticker := time.NewTicker(5 * time.Second)
 			for range ticker.C {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				err := c.Ping(ctx)
+				pingErr := c.Ping(ctx)
 				cancel()
-				if err != nil {
-					p.Alive = false
-					log.Printf("Peer %s unreachable: %v", p.ID, err)
-				}
-
-				if !p.Alive && err == nil {
-					p.Alive = true
+				if pingErr != nil {
+					p.Alive.Store(false)
+					log.Printf("Peer %s unreachable: %v", p.ID, pingErr)
+				} else if !p.Alive.Load() {
+					p.Alive.Store(true)
 				}
 			}
 		}(client, peer)
 	}
 
-
 	clusterConfig.ConnectAll()
-	err = r.Run(":" + strconv.Itoa(clusterConfig.Self.Port))
-	if err != nil {
-		log.Fatal(err)
+
+	srv := &http.Server{
+		Addr:    ":" + strconv.Itoa(clusterConfig.Self.Port),
+		Handler: r,
 	}
 
-	defer lis.Close()
-	defer close(stopChan)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down...")
+	close(stopChan)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP shutdown error: %v", err)
+	}
+
+	grpcServer.GracefulStop()
+	lis.Close()
 	return nil
 }

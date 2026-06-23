@@ -9,7 +9,7 @@ func (c *Cluster) ConnectAll() {
 	c.Clients = make(map[string]*PeerClient)
 
 	for i := range c.Peers {
-		client, err := ConnectToPeer(c.Peers[i])
+		client, err := ConnectToPeer(&c.Peers[i])
 		if err != nil {
 			continue
 		}
@@ -18,8 +18,9 @@ func (c *Cluster) ConnectAll() {
 }
 
 func (c *Cluster) Replicate(key, value string) error {
-	for _, p := range c.Peers {
-		if !p.Alive {
+	for i := range c.Peers {
+		p := &c.Peers[i]
+		if !p.Alive.Load() {
 			continue
 		}
 

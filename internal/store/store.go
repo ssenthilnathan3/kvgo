@@ -10,7 +10,7 @@ import (
 )
 
 type Store struct {
-	Mu sync.RWMutex
+	mu sync.RWMutex
 	Data map[string]persistence.Entry
 	Persister persistence.Persister
 	WAL *persistence.WALLoader
@@ -19,8 +19,8 @@ type Store struct {
 func (s *Store) Get(key string) (string, error) {
 	var entry persistence.Entry
 
-	s.Mu.RLock()
-	defer s.Mu.RUnlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	entry, exists := s.Data[key]
 	if !exists {
@@ -32,8 +32,8 @@ func (s *Store) Get(key string) (string, error) {
 }
 
 func (s *Store) Put(key string, value string) error {
-	s.Mu.Lock()
-	defer s.Mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	s.Data[key] = persistence.Entry{Value: value, Timestamp: time.Now().UnixNano()}
 
@@ -44,8 +44,8 @@ func (s *Store) Put(key string, value string) error {
 }
 
 func (s *Store) Delete(key string) error {
-	s.Mu.Lock()
-	defer s.Mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	_, exists := s.Data[key]
 	if !exists {
@@ -63,13 +63,13 @@ func (s *Store) Exec(commands []persistence.WAL) error {
 	for _, c := range commands {
 		switch c.Command {
 		case "PUT":
-			s.Mu.Lock()
+			s.mu.Lock()
 			s.Data[c.Key] = persistence.Entry{Value: c.Value.Value, Timestamp: c.Value.Timestamp}
-			s.Mu.Unlock()
+			s.mu.Unlock()
 		case "DELETE":
-			s.Mu.Lock()
+			s.mu.Lock()
 			delete(s.Data, c.Key)
-			s.Mu.Unlock()
+			s.mu.Unlock()
 		default:
 			return fmt.Errorf("No valid command found")
 		}

@@ -179,51 +179,48 @@ func (ld *WALLoader) TruncateLog() error {
 	if err != nil {
 		return fmt.Errorf("Failed to open log file: %v", err)
 	}
-
 	defer inputFile.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(inputFile)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("Error reading log file: %v", err)
+	}
+	inputFile.Close()
+
+	if len(lines) <= int(ld.WALMax) {
+		return nil
+	}
+
+	lines = lines[len(lines)-int(ld.WALMax):]
 
 	tempPath := ld.WALPath + ".tmp"
 	tempFile, err := os.Create(tempPath)
-
 	if err != nil {
 		return fmt.Errorf("Failed to create temporary file: %v", err)
 	}
-	defer tempFile.Close()
 
 	writer := bufio.NewWriter(tempFile)
-	scanner := bufio.NewScanner(inputFile)
-
-	lineCount := 0
-	for scanner.Scan() {
-		lineCount++
-		line := scanner.Text()
-
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		fields := strings.Split(line, "\t")
-		if len(fields) < 3 {
-			continue
-		}
-
-		if lineCount >= int(ld.WALMax) {
-				_, err := writer.WriteString(line + "\n")
-				ld.WALIndex = 0
-				if err != nil {
-					return fmt.Errorf("Failed to write temp file: %v", err)
-				}
+	for _, line := range lines {
+		if _, err := writer.WriteString(line + "\n"); err != nil {
+			return fmt.Errorf("Failed to write temp file: %v", err)
 		}
 	}
-
-	writer.Flush()
-
-	inputFile.Close()
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("Error writing file: %v", err)
+	}
 	tempFile.Close()
 
-	err = os.Rename(tempPath, ld.WALPath)
-	if err != nil {
+	if err := os.Rename(tempPath, ld.WALPath); err != nil {
 		return fmt.Errorf("Failed to replace log file: %v", err)
 	}
+
+	ld.WALIndex = int64(len(lines))
 	return nil
 }

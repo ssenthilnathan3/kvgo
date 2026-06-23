@@ -13,10 +13,10 @@ import (
 type PeerClient struct {
 	conn   *grpc.ClientConn
 	Client pb.CommsServiceClient
-	Mu sync.Mutex
+	mu sync.Mutex
 }
 
-func ConnectToPeer(node Node) (*PeerClient, error) {
+func ConnectToPeer(node *Node) (*PeerClient, error) {
 	addr := fmt.Sprintf("%s:%d", node.Host, node.Grpc)
 	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {

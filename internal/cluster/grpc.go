@@ -12,7 +12,7 @@ import (
 type CommsServer struct {
 	pb.UnimplementedCommsServiceServer
 	Store *store.Store
-	Config Cluster
+	Config *Cluster
 }
 
 func (s *CommsServer) Ping(ctx context.Context, req *pb.PingRequest) (*pb.PingResponse, error) {
